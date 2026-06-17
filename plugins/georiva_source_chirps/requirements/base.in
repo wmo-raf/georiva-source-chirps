@@ -1,0 +1,6 @@
+# Direct runtime dependencies for the CHIRPS plugin.
+#
+# Both are already provided by GeoRiva core (listed here to document the
+# dependency; do not re-pin, to avoid conflicting with core's versions):
+#   rasterio   — validate the decompressed GeoTIFF and set its nodata value
+#   requests   — HEAD/GET against the CHC CHIRPS file server

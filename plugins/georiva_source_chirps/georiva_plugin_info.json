@@ -1,0 +1,11 @@
+{
+  "name": "GeoRiva CHIRPS",
+  "version": "0.0.1",
+  "description": "GeoRiva source plugin for CHIRPS v2.0 rainfall (UCSB Climate Hazards Center). Provides monthly, dekadal and pentadal precipitation GeoTIFF data feeds downloaded over HTTPS.",
+  "author": "WMO RAF",
+  "author_url": "https://github.com/wmo-raf",
+  "url": "https://github.com/wmo-raf/georiva-source-chirps",
+  "license": "MIT",
+  "contact": "TODO",
+  "requires_env": []
+}

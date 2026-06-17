@@ -1,0 +1,2 @@
+# No extra pins: this plugin's dependencies (rasterio, requests) are provided
+# by GeoRiva core. See base.in for documentation.
