@@ -28,8 +28,8 @@ COLLECTIONS = {
             {
                 "key": "precip",
                 "name": "Precipitation",
-                "units": "mm",
-                "source": "band_1",
+                "source_units": "mm",
+                "source_variable": "band_1",
                 "value_range": (0.0, 300.0),
             }
         ],
@@ -42,8 +42,8 @@ COLLECTIONS = {
             {
                 "key": "precip",
                 "name": "Precipitation",
-                "units": "mm",
-                "source": "band_1",
+                "source_units": "mm",
+                "source_variable": "band_1",
                 "value_range": (0.0, 100.0),
             }
         ],
@@ -56,8 +56,8 @@ COLLECTIONS = {
             {
                 "key": "precip",
                 "name": "Precipitation",
-                "units": "mm",
-                "source": "band_1",
+                "source_units": "mm",
+                "source_variable": "band_1",
                 "value_range": (0.0, 60.0),
             }
         ],
