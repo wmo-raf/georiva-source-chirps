@@ -13,6 +13,8 @@ import requests
 from georiva.sources.fetch import FileRequest, HTTPFetchStrategy
 from georiva.sources.source import BaseDataSource, DataSourceType
 
+from .periods import dekad_of_month, pentad_of_month
+
 CHIRPS_NODATA = -9999.0
 
 
@@ -181,17 +183,13 @@ class CHIRPSDataSource(BaseDataSource):
         return f"{self.BASE_URL}{path}"
     
     def _pentad_num(self, dt: datetime) -> int:
-        # Pentad numbering: 1..6 within a month based on day-of-month
-        # (1:1-5, 2:6-10, 3:11-15, 4:16-20, 5:21-25, 6:26-end)
-        return min(6, ((dt.day - 1) // 5) + 1)
-    
+        # Within-month pentad (1-6). Slot math lives in periods.py so the fetch
+        # path and the derivation recipes share one definition.
+        return pentad_of_month(dt)
+
     def _dekad_num(self, dt: datetime) -> int:
-        # Dekad numbering: 1 (days 1-10), 2 (days 11-20), 3 (days 21-end)
-        if dt.day <= 10:
-            return 1
-        if dt.day <= 20:
-            return 2
-        return 3
+        # Within-month dekad (1-3). See periods.py (single home for slot math).
+        return dekad_of_month(dt)
     
     def _pentadal_url(self, dt: datetime) -> str:
         spec = self.PERIODS["pentadal"]

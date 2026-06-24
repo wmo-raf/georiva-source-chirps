@@ -130,6 +130,12 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
     def get_collection_definitions(cls) -> list[CollectionDefinition]:
         return parse_collection_defs(COLLECTIONS)
     
+    @classmethod
+    def get_wizard_defaults(cls) -> dict:
+        return {
+            "target_tier": "staging"
+        }
+    
     # =========================================================================
     # Catalog defaults (pre-fill wizard step 1)
     # =========================================================================
