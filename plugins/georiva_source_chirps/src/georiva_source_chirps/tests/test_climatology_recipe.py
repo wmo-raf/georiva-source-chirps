@@ -86,11 +86,13 @@ class _ClimoFixture(DjangoTestCase):
         self.unit_mm, _ = Unit.objects.get_or_create(
             symbol="mm", defaults={"name": "millimetre"}
         )
-        # A source Variable for the recipe to mirror onto its output product.
+        # The source Variable lives on the raw *published* collection (same slug
+        # as the staging collection) — what promotion serves — not on the
+        # staging asset, which carries no Variable in production.
         from georiva.core.models import Collection
 
         self.src_col = Collection.objects.create(
-            catalog=self.catalog, slug="chirps-monthly-src", name="src"
+            catalog=self.catalog, slug=self.SOURCE, name=self.SOURCE
         )
         self.src_var = Variable.objects.create(
             collection=self.src_col, slug="precip", name="Precipitation",
@@ -98,7 +100,8 @@ class _ClimoFixture(DjangoTestCase):
         )
 
     def _stage(self, dt):
-        """Register one monthly CHIRPS slice valid at ``dt`` + its source asset."""
+        """Register one monthly CHIRPS slice valid at ``dt`` + its source asset
+        (no Variable on the asset, matching the real staging consumer)."""
         item = StagingItem.objects.create(
             collection=self.scol,
             datetime=dt,
@@ -106,7 +109,7 @@ class _ClimoFixture(DjangoTestCase):
         )
         StagingAsset.objects.create(
             item=item, href=f"chirps/{dt:%Y%m}.tif", roles=["source"],
-            format="geotiff", checksum=f"sum-{dt:%Y%m}", variable=self.src_var,
+            format="geotiff", checksum=f"sum-{dt:%Y%m}",
         )
         return item
 
@@ -172,6 +175,8 @@ class RunUnitTests(_ClimoFixture):
         # Resolution + baseline live in the slug; the slot lives in Item.time.
         self.assertEqual(item.collection.slug, "chirps-monthly-climatology-1991-2020")
         self.assertEqual(item.time, datetime(1991, 6, 1, tzinfo=utc))
+        # The normals are a derivation intermediate, not a served product.
+        self.assertEqual(item.collection.visibility, "internal")
 
         # The true slot/baseline/count are recorded on the item.
         climo = item.properties["climatology"]

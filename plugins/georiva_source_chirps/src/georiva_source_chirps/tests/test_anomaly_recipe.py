@@ -43,8 +43,10 @@ class _AnomalyFixture(DjangoTestCase):
         self.unit_mm, _ = Unit.objects.get_or_create(
             symbol="mm", defaults={"name": "millimetre"}
         )
+        # Source Variable lives on the raw published collection (slug == source),
+        # not on the staging asset (which has none in production).
         self.src_col = Collection.objects.create(
-            catalog=self.catalog, slug="chirps-monthly-src", name="src"
+            catalog=self.catalog, slug=self.SOURCE, name=self.SOURCE
         )
         self.src_var = Variable.objects.create(
             collection=self.src_col, slug="precip", name="Precipitation",
@@ -58,7 +60,7 @@ class _AnomalyFixture(DjangoTestCase):
         )
         StagingAsset.objects.create(
             item=item, href=f"chirps/{dt:%Y%m}.tif", roles=["source"],
-            format="geotiff", checksum=f"sum-{dt:%Y%m}", variable=self.src_var,
+            format="geotiff", checksum=f"sum-{dt:%Y%m}",
         )
         return item
 

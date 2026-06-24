@@ -148,27 +148,20 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         The only real I/O in the recipe and its single test seam: unit tests
         patch this to return an in-memory cube. Exact time coordinates are
         irrelevant here — the transform means the whole stack — so slices are
-        concatenated along a synthetic time index.
+        stacked along a synthetic time index. Nodata is mapped to NaN so the
+        mean skips it.
         """
-        import tempfile
-
-        import rioxarray  # noqa: F401  (registers the rasterio engine)
         import xarray as xr
 
-        from georiva.core.storage import BucketType, storage
+        from georiva_source_chirps.recipes.io import read_band
+
+        from georiva.core.storage import BucketType
 
         if not assets:
             raise ValueError("ChirpsClimatologyRecipe: no source assets to read")
 
-        arrays = []
-        for asset in assets:
-            data = storage.bucket(BucketType.STAGING).read_bytes(asset.href)
-            with tempfile.NamedTemporaryFile(suffix=".tif") as fh:
-                fh.write(data)
-                fh.flush()
-                da = rioxarray.open_rasterio(fh.name).squeeze(drop=True)
-            arrays.append(da)
-        return xr.concat(arrays, dim="time")
+        bands = [read_band(a, BucketType.STAGING) for a in assets]
+        return xr.DataArray(np.stack(bands, axis=0), dims=["time", "y", "x"])
 
     # ---- helpers ------------------------------------------------------------
 
@@ -178,28 +171,40 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         return f"{unit['source_collection']}-climatology-{b0}-{b1}"
 
     def _published_collection(self, unit, catalog):
+        """The normals collection. Marked INTERNAL: it is a derivation
+        intermediate (the anomaly's baseline input), read by the engine but not
+        served — only the raw and anomaly collections are public."""
         from georiva.core.models import Collection
 
         slug = self._collection_slug(unit)
         collection, _ = Collection.objects.get_or_create(
-            catalog=catalog, slug=slug, defaults={"name": slug},
+            catalog=catalog, slug=slug,
+            defaults={"name": slug, "visibility": Collection.Visibility.INTERNAL},
         )
         return collection
 
     def _output_variable(self, unit, resolved):
         """The output ``precip`` Variable, mirroring the source (the normal is in
-        the same unit and range as the input rainfall)."""
+        the same unit and range as the input rainfall).
+
+        Staging assets carry no Variable, so the source is taken from the raw
+        *published* collection (same slug as the staging collection) — the one
+        promotion serves and provisioning gave the precip Variable.
+        """
         from georiva.core.models import Variable
 
-        src = next(
-            (a.variable for a in resolved["value"].assets if a.variable), None
-        )
+        si = resolved["value"].items[0]
+        catalog = si.collection.catalog
+        src = Variable.objects.filter(
+            collection__catalog=catalog,
+            collection__slug=unit["source_collection"],
+        ).first()
         if src is None:
             raise ValueError(
-                "ChirpsClimatologyRecipe: source asset has no Variable to mirror"
+                "ChirpsClimatologyRecipe: no source Variable in raw collection "
+                f"'{unit['source_collection']}'"
             )
-        si = resolved["value"].items[0]
-        collection = self._published_collection(unit, si.collection.catalog)
+        collection = self._published_collection(unit, catalog)
         out_var, _ = Variable.objects.get_or_create(
             collection=collection, slug=src.slug,
             defaults={"name": src.name, "unit": src.unit,
