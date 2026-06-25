@@ -20,7 +20,28 @@ from georiva_source_chirps.recipes.anomaly import ChirpsAnomalyRecipe
 
 UTC = timezone.utc
 
-CLIMO_SLUG = "chirps-monthly-climatology-1991-2020"
+# One climatology collection per resolution — the baseline is config, not slug.
+CLIMO_SLUG = "chirps-monthly-climatology"
+ANOMALY_SLUG = "chirps-monthly-anomaly"
+RELATIVE_SLUG = "chirps-monthly-relative-anomaly"
+
+
+def _selector(source="chirps-monthly", climo=CLIMO_SLUG,
+              anomaly=ANOMALY_SLUG, relative=RELATIVE_SLUG, **extra):
+    """An anomaly selector in the injected-declaration shape (ADR-0008): the
+    product's (empty) config plus the binding the invocation layer merges in."""
+    sel = {
+        "inputs": [
+            {"role": "value", "collection": source, "tier": "staging"},
+            {"role": "baseline", "collection": climo, "tier": "published"},
+        ],
+        "outputs": [
+            {"role": "anomaly", "collection": anomaly},
+            {"role": "relative-anomaly", "collection": relative},
+        ],
+    }
+    sel.update(extra)
+    return sel
 
 
 def _mock_writer():
@@ -85,9 +106,11 @@ class _AnomalyFixture(DjangoTestCase):
         return item
 
     def _unit(self, si, quantity="anomaly", valid=datetime(2024, 6, 15, tzinfo=UTC)):
+        out = RELATIVE_SLUG if quantity == "relative_anomaly" else ANOMALY_SLUG
         return {
             "staging_item_id": si.pk, "source_collection": self.SOURCE,
-            "resolution": "monthly", "baseline": [1991, 2020],
+            "baseline_collection": CLIMO_SLUG, "output_collection": out,
+            "resolution": "monthly",
             "valid_time": valid.isoformat(), "quantity": quantity,
         }
 
@@ -95,7 +118,8 @@ class _AnomalyFixture(DjangoTestCase):
 class CandidateUnitsTests(_AnomalyFixture):
     def test_staging_arrival_yields_one_unit_per_quantity(self):
         si = self._stage(datetime(2024, 6, 15, tzinfo=UTC))
-        trigger = {"staging_item_id": si.pk, "collection_slug": self.SOURCE}
+        trigger = {"staging_item_id": si.pk, "collection_slug": self.SOURCE,
+                   **_selector()}
 
         units = list(ChirpsAnomalyRecipe().candidate_units(trigger))
 
@@ -105,15 +129,19 @@ class CandidateUnitsTests(_AnomalyFixture):
         for u in units:
             self.assertEqual(u["staging_item_id"], si.pk)
             self.assertEqual(u["resolution"], "monthly")
-            self.assertEqual(u["baseline"], [1991, 2020])
+            # Baseline + output collections come from the injected declaration,
+            # with no baseline years in the slugs.
+            self.assertEqual(u["baseline_collection"], CLIMO_SLUG)
+            self.assertNotIn("baseline", u)
+        by_q = {u["quantity"]: u["output_collection"] for u in units}
+        self.assertEqual(by_q["anomaly"], ANOMALY_SLUG)
+        self.assertEqual(by_q["relative_anomaly"], RELATIVE_SLUG)
 
     def test_published_trigger_is_ignored(self):
         # Promotion outputs, climatology outputs, and its own outputs all arrive
         # as published triggers; the anomaly consumes staging values only.
-        trigger = {
-            "published_item_id": 7,
-            "collection_slug": "chirps-monthly-climatology-1991-2020",
-        }
+        trigger = {"published_item_id": 7, "collection_slug": CLIMO_SLUG,
+                   **_selector()}
         self.assertEqual(list(ChirpsAnomalyRecipe().candidate_units(trigger)), [])
 
 
@@ -122,9 +150,7 @@ class EnumerateUnitsTests(_AnomalyFixture):
         self._stage(datetime(2022, 6, 15, tzinfo=UTC))
         self._stage(datetime(2023, 7, 10, tzinfo=UTC))
 
-        units = list(
-            ChirpsAnomalyRecipe().enumerate_units({"source_collection": self.SOURCE})
-        )
+        units = list(ChirpsAnomalyRecipe().enumerate_units(_selector()))
 
         # 2 staged slices × 2 quantities.
         self.assertEqual(len(units), 4)
@@ -136,7 +162,7 @@ class EnumerateUnitsTests(_AnomalyFixture):
         self._stage(datetime(2030, 6, 15, tzinfo=UTC))
 
         units = list(ChirpsAnomalyRecipe().enumerate_units(
-            {"source_collection": self.SOURCE, "year_range": [2000, 2025]}
+            _selector(year_range=[2000, 2025])
         ))
 
         # Only the 2022 slice is in range → × 2 quantities.
@@ -184,7 +210,7 @@ class RunUnitTests(_AnomalyFixture):
 
         self.assertEqual(result.status, "completed")
         item = Item.objects.get(pk=result.item_id)
-        self.assertEqual(item.collection.slug, "chirps-monthly-anomaly-1991-2020")
+        self.assertEqual(item.collection.slug, "chirps-monthly-anomaly")
         # Anomaly Items are keyed on the real valid time, not a sentinel.
         self.assertEqual(item.time, datetime(2024, 6, 15, tzinfo=UTC))
 
@@ -204,9 +230,7 @@ class RunUnitTests(_AnomalyFixture):
         result = self._run(self._unit(si, "relative_anomaly"), value_arr, normal_arr)
 
         item = Item.objects.get(pk=result.item_id)
-        self.assertEqual(
-            item.collection.slug, "chirps-monthly-relative-anomaly-1991-2020"
-        )
+        self.assertEqual(item.collection.slug, "chirps-monthly-relative-anomaly")
         asset = item.assets.get()
         self.assertAlmostEqual(asset.stats_mean, 0.5)  # (30-20)/20
 

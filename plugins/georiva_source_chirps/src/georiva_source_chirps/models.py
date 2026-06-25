@@ -150,7 +150,9 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
         from .constants import (
             CHIRPS_BASELINE,
             DEFAULT_MIN_COUNT,
+            anomaly_slug,
             climatology_slug,
+            relative_anomaly_slug,
             resolution_from_slug,
             source_slug,
         )
@@ -193,6 +195,29 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
                 outputs=(OutputRef(role="climatology",
                                    collection=climatology_slug(resolution)),),
                 trigger_mode="manual",
+            ))
+            products.append(DerivedProductDefinition(
+                key=anomaly_slug(resolution),
+                recipe_type="chirps-anomaly",
+                label=f"CHIRPS {resolution} anomaly",
+                description=(
+                    f"On each arriving {resolution} slice, emit its absolute and "
+                    "relative rainfall anomaly against the matching climatology "
+                    "normal for the calendar slot."
+                ),
+                config_schema=(),
+                inputs=(
+                    InputRef(role="value", collection=raw, tier="staging"),
+                    InputRef(role="baseline",
+                             collection=climatology_slug(resolution),
+                             tier="published"),
+                ),
+                outputs=(
+                    OutputRef(role="anomaly", collection=anomaly_slug(resolution)),
+                    OutputRef(role="relative-anomaly",
+                              collection=relative_anomaly_slug(resolution)),
+                ),
+                trigger_mode="event",
             ))
         return products
 
