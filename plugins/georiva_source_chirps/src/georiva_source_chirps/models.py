@@ -129,13 +129,44 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
     @classmethod
     def get_collection_definitions(cls) -> list[CollectionDefinition]:
         return parse_collection_defs(COLLECTIONS)
-    
-    @classmethod
-    def get_wizard_defaults(cls) -> dict:
-        return {
-            "target_tier": "staging"
-        }
-    
+
+    # =========================================================================
+    # Derived products (ADR-0008)
+    #
+    # Tier is auto-derived from the products declared here: a raw CHIRPS
+    # collection routes to staging because a product consumes it at the staging
+    # tier, so the old get_wizard_defaults target_tier hack is gone. The
+    # promotion product (this slice) is what then publishes the raw rainfall.
+    # =========================================================================
+
+    def get_derived_products(self):
+        from georiva.core.derived_products import (
+            DerivedProductDefinition,
+            InputRef,
+            OutputRef,
+        )
+
+        from .constants import resolution_from_slug, source_slug
+
+        products = []
+        for key in self.selected_definition_keys():
+            resolution = resolution_from_slug(key)
+            raw = source_slug(resolution)
+            products.append(DerivedProductDefinition(
+                key=f"{raw}-promotion",
+                recipe_type="promotion",
+                label=f"Serve raw CHIRPS {resolution}",
+                description=(
+                    f"Publish the raw {resolution} CHIRPS rainfall by promoting "
+                    "each staged slice 1:1 to its served collection."
+                ),
+                config_schema=(),
+                inputs=(InputRef(role="source", collection=raw, tier="staging"),),
+                outputs=(OutputRef(role="served", collection=raw),),
+                trigger_mode="event",
+            ))
+        return products
+
     # =========================================================================
     # Catalog defaults (pre-fill wizard step 1)
     # =========================================================================
