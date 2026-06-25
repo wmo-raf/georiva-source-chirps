@@ -23,12 +23,51 @@ from georiva.processing.recipe import (
 )
 from georiva.processing.registry import RecipeRegistry
 
-from georiva_source_chirps.constants import CHIRPS_BASELINE, resolution_from_slug
+from georiva_source_chirps.constants import resolution_from_slug
 from georiva_source_chirps.periods import slot_time
 from georiva_source_chirps.recipes.stats import array_stats
 
-# The two quantities every arriving slice produces.
-QUANTITIES = ("anomaly", "relative_anomaly")
+# The two quantities every arriving slice produces, mapped to the output role
+# each is published under in the product declaration.
+QUANTITY_OUTPUT_ROLE = {
+    "anomaly": "anomaly",
+    "relative_anomaly": "relative-anomaly",
+}
+QUANTITIES = tuple(QUANTITY_OUTPUT_ROLE)
+
+
+def _value_collection(selector: dict) -> str:
+    """The raw staging collection slug from the product's declared inputs."""
+    for ref in selector.get("inputs", []):
+        if ref.get("tier") == "staging":
+            return ref["collection"]
+    raise ValueError(
+        "ChirpsAnomalyRecipe: selector has no staging (value) input collection "
+        "(expected the injected product declaration, ADR-0008)"
+    )
+
+
+def _baseline_collection(selector: dict) -> str:
+    """The published climatology collection slug from the declared inputs."""
+    for ref in selector.get("inputs", []):
+        if ref.get("tier") == "published":
+            return ref["collection"]
+    raise ValueError(
+        "ChirpsAnomalyRecipe: selector has no published (baseline) input "
+        "collection (expected the injected product declaration, ADR-0008)"
+    )
+
+
+def _output_for_quantity(selector: dict, quantity: str) -> str:
+    """The output collection slug for a quantity, by its declared output role."""
+    role = QUANTITY_OUTPUT_ROLE[quantity]
+    for ref in selector.get("outputs", []):
+        if ref.get("role") == role:
+            return ref["collection"]
+    raise ValueError(
+        f"ChirpsAnomalyRecipe: selector has no output for role '{role}' "
+        "(expected the injected product declaration, ADR-0008)"
+    )
 
 
 @RecipeRegistry.register
@@ -39,17 +78,21 @@ class ChirpsAnomalyRecipe(BaseRecipe):
     def candidate_units(self, trigger) -> Iterable[ProductionUnit]:
         """Staging-value arrivals only. Published-item triggers (promotion
         outputs, climatology outputs, our own outputs) are ignored so the
-        anomaly never double-fires or mis-reads a non-value input."""
-        trigger = trigger or {}
-        if "published_item_id" in trigger:
+        anomaly never double-fires or mis-reads a non-value input. Source,
+        baseline and output collections are read from the injected product
+        declaration in the selector (ADR-0008), never reconstructed."""
+        selector = trigger or {}
+        if "published_item_id" in selector:
             return []
-        if "staging_item_id" in trigger:
-            return list(self._units_for_staging_item(trigger["staging_item_id"]))
-        return self.enumerate_units(trigger)
-    
-    def _units_for_staging_item(self, staging_item_id) -> Iterable[ProductionUnit]:
+        if "staging_item_id" in selector:
+            return list(
+                self._units_for_staging_item(selector, selector["staging_item_id"])
+            )
+        return self.enumerate_units(selector)
+
+    def _units_for_staging_item(self, selector, staging_item_id) -> Iterable[ProductionUnit]:
         from georiva.staging.models import StagingItem
-        
+
         si = (
             StagingItem.objects
             .select_related("collection")
@@ -58,21 +101,24 @@ class ChirpsAnomalyRecipe(BaseRecipe):
         )
         if si is None or si.datetime is None:
             return
-        resolution = resolution_from_slug(si.collection.slug)
+        for unit in self._units_for_slice(selector, si):
+            yield unit
+
+    def _units_for_slice(self, selector, si) -> Iterable[ProductionUnit]:
+        source = _value_collection(selector)
+        baseline_collection = _baseline_collection(selector)
+        resolution = resolution_from_slug(source)
         for quantity in QUANTITIES:
-            yield self._make_unit(si, resolution, quantity, list(CHIRPS_BASELINE))
-    
-    @staticmethod
-    def _make_unit(si, resolution, quantity, baseline) -> ProductionUnit:
-        return {
-            "staging_item_id": si.pk,
-            "source_collection": si.collection.slug,
-            "resolution": resolution,
-            "baseline": baseline,
-            "valid_time": si.datetime.isoformat(),
-            "quantity": quantity,
-        }
-    
+            yield {
+                "staging_item_id": si.pk,
+                "source_collection": source,
+                "baseline_collection": baseline_collection,
+                "output_collection": _output_for_quantity(selector, quantity),
+                "resolution": resolution,
+                "valid_time": si.datetime.isoformat(),
+                "quantity": quantity,
+            }
+
     def enumerate_units(self, selector) -> Iterable[ProductionUnit]:
         """Manual backfill: anomalies for every already-staged slice in range.
 
@@ -83,13 +129,11 @@ class ChirpsAnomalyRecipe(BaseRecipe):
         events flow through ``candidate_units``.
         """
         from georiva.staging.models import StagingItem
-        
+
         selector = selector or {}
-        source = selector["source_collection"]
-        resolution = resolution_from_slug(source)
-        baseline = selector.get("baseline", list(CHIRPS_BASELINE))
+        source = _value_collection(selector)
         year_range = selector.get("year_range")
-        
+
         for si in (
                 StagingItem.objects
                         .select_related("collection")
@@ -99,8 +143,8 @@ class ChirpsAnomalyRecipe(BaseRecipe):
                 continue
             if year_range and not (year_range[0] <= si.datetime.year <= year_range[1]):
                 continue
-            for quantity in QUANTITIES:
-                yield self._make_unit(si, resolution, quantity, baseline)
+            for unit in self._units_for_slice(selector, si):
+                yield unit
     
     def resolve_inputs(self, unit: ProductionUnit) -> "dict[str, ResolvedInput]":
         value_items, value_assets = self._value(unit)
@@ -131,28 +175,24 @@ class ChirpsAnomalyRecipe(BaseRecipe):
     
     def _baseline(self, unit):
         """The published normal (Published tier) for this slice's calendar slot,
-        located by the slot's sentinel-year ``Item.time``."""
+        located in the declared climatology collection by the slot's
+        sentinel-year ``Item.time``."""
         from datetime import datetime, timezone
-        
+
         from georiva.core.models import Item
-        
+
         dt = datetime.fromisoformat(unit["valid_time"])
         join_time = slot_time(dt, unit["resolution"]).replace(tzinfo=timezone.utc)
         item = (
             Item.objects
             .prefetch_related("assets")
-            .filter(collection__slug=self._climatology_slug(unit), time=join_time)
+            .filter(collection__slug=unit["baseline_collection"], time=join_time)
             .first()
         )
         if item is None:
             return [], []
         return [item], list(item.assets.all())
-    
-    @staticmethod
-    def _climatology_slug(unit: ProductionUnit) -> str:
-        b0, b1 = unit["baseline"]
-        return f"{unit['source_collection']}-climatology-{b0}-{b1}"
-    
+
     def outputs(self, unit: ProductionUnit) -> OutputItem:
         from datetime import datetime
         
@@ -168,7 +208,7 @@ class ChirpsAnomalyRecipe(BaseRecipe):
             bounds=si.bounds, crs=si.crs, width=si.width, height=si.height,
             properties={"anomaly": {
                 "resolution": unit["resolution"], "quantity": unit["quantity"],
-                "baseline": unit["baseline"], "valid_time": unit["valid_time"],
+                "valid_time": unit["valid_time"],
                 "slot": slot_index(valid, unit["resolution"]),
             }},
         )
@@ -209,15 +249,13 @@ class ChirpsAnomalyRecipe(BaseRecipe):
     
     # ---- helpers ------------------------------------------------------------
     
-    def _output_collection_slug(self, unit: ProductionUnit) -> str:
-        b0, b1 = unit["baseline"]
-        infix = "relative-anomaly" if unit["quantity"] == "relative_anomaly" else "anomaly"
-        return f"{unit['source_collection']}-{infix}-{b0}-{b1}"
-    
     def _published_collection(self, unit, catalog):
+        # The output collection comes from the injected product declaration (one
+        # per quantity; no baseline years in the slug). The recipe builds no slug
+        # of its own (ADR-0008).
         from georiva.core.models import Collection
-        
-        slug = self._output_collection_slug(unit)
+
+        slug = unit["output_collection"]
         collection, _ = Collection.objects.get_or_create(
             catalog=catalog, slug=slug, defaults={"name": slug},
         )

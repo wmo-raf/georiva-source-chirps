@@ -96,6 +96,7 @@ class PromotionProductTests(TestCase):
         self.assertEqual(saved, {
             ("chirps-monthly-promotion", "promotion"),
             ("chirps-monthly-climatology", "chirps-climatology"),
+            ("chirps-monthly-anomaly", "chirps-anomaly"),
         })
 
 
@@ -141,6 +142,46 @@ class ClimatologyProductTests(TestCase):
 
         self.assertEqual(cleaned["baseline_start"], 1981)
         self.assertEqual(cleaned["min_count"], 10)
+
+
+class AnomalyProductTests(TestCase):
+    def _anomaly(self, feed):
+        return next(
+            p for p in feed.get_derived_products()
+            if p.recipe_type == "chirps-anomaly"
+        )
+
+    def test_declares_an_event_anomaly_product_per_resolution(self):
+        product = self._anomaly(_transient_feed("chirps-monthly"))
+
+        self.assertEqual(product.key, "chirps-monthly-anomaly")
+        self.assertEqual(product.recipe_type, "chirps-anomaly")
+        self.assertEqual(product.trigger_mode, "event")
+        self.assertEqual(product.config_schema, ())
+
+    def test_consumes_the_raw_value_and_the_published_climatology_baseline(self):
+        product = self._anomaly(_transient_feed("chirps-monthly"))
+
+        self.assertEqual(
+            product.inputs,
+            (
+                InputRef(role="value", collection="chirps-monthly", tier="staging"),
+                InputRef(role="baseline", collection="chirps-monthly-climatology",
+                         tier="published"),
+            ),
+        )
+
+    def test_emits_absolute_and_relative_anomaly_collections_without_baseline_years(self):
+        product = self._anomaly(_transient_feed("chirps-monthly"))
+
+        self.assertEqual(
+            product.outputs,
+            (
+                OutputRef(role="anomaly", collection="chirps-monthly-anomaly"),
+                OutputRef(role="relative-anomaly",
+                          collection="chirps-monthly-relative-anomaly"),
+            ),
+        )
 
 
 class RawRoutesToStagingTests(TestCase):
