@@ -42,11 +42,15 @@ class SlugSchemeTests(TestCase):
         )
 
 
+def _promotion_products(feed):
+    return [p for p in feed.get_derived_products() if p.recipe_type == "promotion"]
+
+
 class PromotionProductTests(TestCase):
     def test_declares_one_promotion_product_per_selected_resolution(self):
         feed = _transient_feed("chirps-monthly")
 
-        products = feed.get_derived_products()
+        products = _promotion_products(feed)
 
         self.assertEqual(len(products), 1)
         product = products[0]
@@ -65,7 +69,7 @@ class PromotionProductTests(TestCase):
     def test_one_product_per_resolution_across_multiple_selections(self):
         feed = _transient_feed("chirps-monthly", "chirps-dekadal")
 
-        keys = {p.key for p in feed.get_derived_products()}
+        keys = {p.key for p in _promotion_products(feed)}
 
         self.assertEqual(keys, {"chirps-monthly-promotion", "chirps-dekadal-promotion"})
 
@@ -89,7 +93,54 @@ class PromotionProductTests(TestCase):
         }
 
         self.assertEqual(saved, transient)
-        self.assertEqual(saved, {("chirps-monthly-promotion", "promotion")})
+        self.assertEqual(saved, {
+            ("chirps-monthly-promotion", "promotion"),
+            ("chirps-monthly-climatology", "chirps-climatology"),
+        })
+
+
+class ClimatologyProductTests(TestCase):
+    def _climatology(self, feed):
+        return next(
+            p for p in feed.get_derived_products()
+            if p.recipe_type == "chirps-climatology"
+        )
+
+    def test_declares_a_manual_climatology_product_per_resolution(self):
+        product = self._climatology(_transient_feed("chirps-monthly"))
+
+        self.assertEqual(product.key, "chirps-monthly-climatology")
+        self.assertEqual(product.recipe_type, "chirps-climatology")
+        self.assertEqual(product.trigger_mode, "manual")
+        self.assertEqual(
+            product.inputs,
+            (InputRef(role="value", collection="chirps-monthly", tier="staging"),),
+        )
+        # Output slug drops the baseline years: one climatology collection per
+        # resolution (ADR-0008).
+        self.assertEqual(
+            product.outputs,
+            (OutputRef(role="climatology", collection="chirps-monthly-climatology"),),
+        )
+
+    def test_config_schema_exposes_baseline_and_min_count_with_defaults(self):
+        from georiva_source_chirps.constants import CHIRPS_BASELINE
+
+        product = self._climatology(_transient_feed("chirps-monthly"))
+        schema = {f.key: f for f in product.config_schema}
+
+        self.assertEqual(set(schema), {"baseline_start", "baseline_end", "min_count"})
+        self.assertEqual(schema["baseline_start"].default, CHIRPS_BASELINE[0])
+        self.assertEqual(schema["baseline_end"].default, CHIRPS_BASELINE[1])
+        self.assertEqual(schema["baseline_start"].type, "int")
+
+    def test_config_validates_and_coerces_operator_values(self):
+        product = self._climatology(_transient_feed("chirps-monthly"))
+
+        cleaned = product.validate_config({"baseline_start": "1981", "min_count": "10"})
+
+        self.assertEqual(cleaned["baseline_start"], 1981)
+        self.assertEqual(cleaned["min_count"], 10)
 
 
 class RawRoutesToStagingTests(TestCase):
