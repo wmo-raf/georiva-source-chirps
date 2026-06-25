@@ -1,10 +1,12 @@
 """
 ChirpsClimatologyRecipe — the per-calendar-slot "normal" (Stage 1).
 
-Scheduled/manual: builds one climatological mean Item per calendar slot of a
-CHIRPS resolution over a fixed baseline window (the WMO normal). The anomaly
-recipe (Stage 2) subtracts against these. The engine owns the run loop; this
-recipe only declares the product.
+Manual: builds one climatological mean Item per calendar slot of a CHIRPS
+resolution over an operator-configured baseline window (the WMO normal by
+default). The anomaly recipe (Stage 2) subtracts against these. The engine owns
+the run loop; this recipe is a pure ``(selector) -> units`` transform that reads
+its source/output collections from the injected product declaration and its
+baseline/min_count from config (ADR-0008) — it bakes no slugs or constants.
 
 See docs/adr/0007-chirps-rolling-anomaly-product-structure.md and issue #2.
 """
@@ -23,6 +25,7 @@ from georiva.processing.recipe import (
 )
 from georiva.processing.registry import RecipeRegistry
 
+from georiva_source_chirps.constants import DEFAULT_MIN_COUNT, resolution_from_slug
 from georiva_source_chirps.periods import slot_count, slot_index, slot_start
 from georiva_source_chirps.recipes.stats import array_stats
 
@@ -30,39 +33,57 @@ from georiva_source_chirps.recipes.stats import array_stats
 SENTINEL_YEAR = 1991
 
 
+def _source_collection(selector: dict) -> str:
+    """The raw staging collection slug from the product's declared inputs."""
+    for ref in selector.get("inputs", []):
+        if ref.get("tier") == "staging":
+            return ref["collection"]
+    raise ValueError(
+        "ChirpsClimatologyRecipe: selector has no staging input collection "
+        "(expected the injected product declaration, ADR-0008)"
+    )
+
+
+def _output_collection(selector: dict) -> str:
+    """The normals collection slug from the product's declared outputs."""
+    outputs = selector.get("outputs", [])
+    if not outputs:
+        raise ValueError(
+            "ChirpsClimatologyRecipe: selector has no output collection "
+            "(expected the injected product declaration, ADR-0008)"
+        )
+    return outputs[0]["collection"]
+
+
 @RecipeRegistry.register
 class ChirpsClimatologyRecipe(BaseRecipe):
     type = "chirps-climatology"
     version = "1"
 
-    # A normal built from too few years is a weak reference everything
-    # downstream subtracts against, so a slot below this many contributing
-    # slices is skipped rather than published. Overridable per unit.
-    MIN_COUNT = 20
-
     def candidate_units(self, trigger) -> Iterable[ProductionUnit]:
-        """Scheduled/manual only: the product space (slot × baseline) isn't
-        derivable from a bare arriving input, so a trigger lacking the explicit
-        period config yields nothing. Invoked over an explicit selector instead."""
+        """Manual only. ``dispatch_for_input`` still fans this product out on a
+        raw staging arrival, so an event-marker trigger must no-op; the product
+        space (slot × baseline) is enumerated from a deliberate, trigger-less
+        manual/backfill selector instead."""
         trigger = trigger or {}
-        if not (
-            trigger.get("source_collection")
-            and trigger.get("resolution")
-            and trigger.get("baseline")
-        ):
+        if "staging_item_id" in trigger or "published_item_id" in trigger:
             return []
         return self.enumerate_units(trigger)
 
     def enumerate_units(self, selector) -> Iterable[ProductionUnit]:
         selector = selector or {}
-        source = selector["source_collection"]
-        resolution = selector["resolution"]
-        baseline = selector["baseline"]
+        source = _source_collection(selector)
+        output = _output_collection(selector)
+        resolution = resolution_from_slug(source)
+        baseline = [selector["baseline_start"], selector["baseline_end"]]
+        min_count = selector.get("min_count", DEFAULT_MIN_COUNT)
         for slot in range(1, slot_count(resolution) + 1):
             yield {
                 "source_collection": source,
+                "output_collection": output,
                 "resolution": resolution,
                 "baseline": baseline,
+                "min_count": min_count,
                 "slot": slot,
             }
 
@@ -82,7 +103,7 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         return value is not None and len(value.items) >= self._min_count(unit)
 
     def _min_count(self, unit: ProductionUnit) -> int:
-        return unit.get("min_count", self.MIN_COUNT)
+        return unit.get("min_count", DEFAULT_MIN_COUNT)
 
     @staticmethod
     def _slot_items(unit: ProductionUnit) -> list:
@@ -167,8 +188,10 @@ class ChirpsClimatologyRecipe(BaseRecipe):
 
     @staticmethod
     def _collection_slug(unit: ProductionUnit) -> str:
-        b0, b1 = unit["baseline"]
-        return f"{unit['source_collection']}-climatology-{b0}-{b1}"
+        # The normals collection comes from the injected product declaration
+        # (one collection per resolution; the baseline is config, not in the
+        # slug). The recipe builds no slug of its own (ADR-0008).
+        return unit["output_collection"]
 
     def _published_collection(self, unit, catalog):
         """The normals collection. Marked INTERNAL: it is a derivation

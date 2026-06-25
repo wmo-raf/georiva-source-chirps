@@ -41,34 +41,53 @@ def _cube(values_by_time, ny=3, nx=2):
     return xr.DataArray(data, coords={"time": time}, dims=["time", "y", "x"])
 
 
+def _selector(source="chirps-monthly", out="chirps-monthly-climatology",
+              baseline=(1991, 2020), min_count=20, **extra):
+    """A manual-run selector in the injected-declaration shape (ADR-0008): the
+    product's config plus the binding the invocation layer merges in."""
+    sel = {
+        "inputs": [{"role": "value", "collection": source, "tier": "staging"}],
+        "outputs": [{"role": "climatology", "collection": out}],
+        "baseline_start": baseline[0],
+        "baseline_end": baseline[1],
+        "min_count": min_count,
+    }
+    sel.update(extra)
+    return sel
+
+
 class EnumerateUnitsTests(TestCase):
-    def test_enumerates_one_unit_per_calendar_slot(self):
-        selector = {
-            "source_collection": "chirps-monthly",
-            "resolution": "monthly",
-            "baseline": [1991, 2020],
-        }
-        units = list(ChirpsClimatologyRecipe().enumerate_units(selector))
+    def test_enumerates_one_unit_per_calendar_slot_from_the_declaration(self):
+        units = list(ChirpsClimatologyRecipe().enumerate_units(_selector()))
 
         # Monthly has 12 calendar slots; each unit carries its own slot.
         self.assertEqual(len(units), 12)
         self.assertEqual({u["slot"] for u in units}, set(range(1, 13)))
 
-    def test_candidate_units_ignores_bare_arrival_triggers(self):
-        # Climatology is scheduled/manual: a plain staging arrival (no period
-        # config) must not trigger it.
-        recipe = ChirpsClimatologyRecipe()
-        trigger = {"staging_item_id": 5, "collection_slug": "chirps-monthly"}
-        self.assertEqual(list(recipe.candidate_units(trigger)), [])
+    def test_units_carry_collections_resolution_baseline_and_min_count(self):
+        unit = next(iter(ChirpsClimatologyRecipe().enumerate_units(
+            _selector(baseline=(1981, 2010), min_count=15)
+        )))
 
-    def test_candidate_units_enumerates_an_explicit_selector(self):
+        # source/output collections come from the injected declaration, not the
+        # recipe; resolution is derived from the source slug.
+        self.assertEqual(unit["source_collection"], "chirps-monthly")
+        self.assertEqual(unit["output_collection"], "chirps-monthly-climatology")
+        self.assertEqual(unit["resolution"], "monthly")
+        self.assertEqual(unit["baseline"], [1981, 2010])
+        self.assertEqual(unit["min_count"], 15)
+
+    def test_candidate_units_ignores_event_arrival_triggers(self):
+        # Climatology is manual: dispatch_for_input still fans it out on a raw
+        # arrival, so it must no-op on event-marker triggers.
         recipe = ChirpsClimatologyRecipe()
-        selector = {
-            "source_collection": "chirps-monthly",
-            "resolution": "monthly",
-            "baseline": [1991, 2020],
-        }
-        self.assertEqual(len(list(recipe.candidate_units(selector))), 12)
+        for marker in ("staging_item_id", "published_item_id"):
+            trigger = {marker: 5, "collection_slug": "chirps-monthly", **_selector()}
+            self.assertEqual(list(recipe.candidate_units(trigger)), [])
+
+    def test_candidate_units_enumerates_a_manual_selector(self):
+        recipe = ChirpsClimatologyRecipe()
+        self.assertEqual(len(list(recipe.candidate_units(_selector()))), 12)
 
 
 class _ClimoFixture(DjangoTestCase):
@@ -115,8 +134,10 @@ class _ClimoFixture(DjangoTestCase):
 
     def _unit(self, **over):
         unit = {
-            "source_collection": self.SOURCE, "resolution": "monthly",
-            "baseline": [1991, 2020], "slot": 6,
+            "source_collection": self.SOURCE,
+            "output_collection": f"{self.SOURCE}-climatology",
+            "resolution": "monthly",
+            "baseline": [1991, 2020], "min_count": 20, "slot": 6,
         }
         unit.update(over)
         return unit
@@ -172,8 +193,9 @@ class RunUnitTests(_ClimoFixture):
 
         self.assertEqual(result.status, "completed")
         item = Item.objects.get(pk=result.item_id)
-        # Resolution + baseline live in the slug; the slot lives in Item.time.
-        self.assertEqual(item.collection.slug, "chirps-monthly-climatology-1991-2020")
+        # One climatology collection per resolution — the baseline is config,
+        # not in the slug; the slot lives in Item.time.
+        self.assertEqual(item.collection.slug, "chirps-monthly-climatology")
         self.assertEqual(item.time, datetime(1991, 6, 1, tzinfo=utc))
         # The normals are a derivation intermediate, not a served product.
         self.assertEqual(item.collection.visibility, "internal")

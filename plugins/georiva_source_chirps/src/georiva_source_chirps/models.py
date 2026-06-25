@@ -141,12 +141,19 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
 
     def get_derived_products(self):
         from georiva.core.derived_products import (
+            ConfigField,
             DerivedProductDefinition,
             InputRef,
             OutputRef,
         )
 
-        from .constants import resolution_from_slug, source_slug
+        from .constants import (
+            CHIRPS_BASELINE,
+            DEFAULT_MIN_COUNT,
+            climatology_slug,
+            resolution_from_slug,
+            source_slug,
+        )
 
         products = []
         for key in self.selected_definition_keys():
@@ -164,6 +171,28 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
                 inputs=(InputRef(role="source", collection=raw, tier="staging"),),
                 outputs=(OutputRef(role="served", collection=raw),),
                 trigger_mode="event",
+            ))
+            products.append(DerivedProductDefinition(
+                key=climatology_slug(resolution),
+                recipe_type="chirps-climatology",
+                label=f"CHIRPS {resolution} climatology",
+                description=(
+                    f"Build the per-calendar-slot {resolution} rainfall normal "
+                    "over a baseline window — the reference the anomaly subtracts "
+                    "against. Run manually once the raw record is staged."
+                ),
+                config_schema=(
+                    ConfigField(key="baseline_start", type="int",
+                                default=CHIRPS_BASELINE[0]),
+                    ConfigField(key="baseline_end", type="int",
+                                default=CHIRPS_BASELINE[1]),
+                    ConfigField(key="min_count", type="int",
+                                default=DEFAULT_MIN_COUNT),
+                ),
+                inputs=(InputRef(role="value", collection=raw, tier="staging"),),
+                outputs=(OutputRef(role="climatology",
+                                   collection=climatology_slug(resolution)),),
+                trigger_mode="manual",
             ))
         return products
 

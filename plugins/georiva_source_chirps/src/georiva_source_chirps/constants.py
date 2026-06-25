@@ -11,6 +11,11 @@ from __future__ import annotations
 # The WMO standard normal. (year_start, year_end), inclusive.
 CHIRPS_BASELINE = (1991, 2020)
 
+# A normal built from too few years is a weak reference everything downstream
+# subtracts against, so a slot below this many contributing slices is skipped.
+# The single source for the climatology product's min_count ConfigField default.
+DEFAULT_MIN_COUNT = 20
+
 # CHIRPS resolutions, as the trailing token of a source collection slug.
 RESOLUTIONS = ("monthly", "dekadal", "pentadal")
 
