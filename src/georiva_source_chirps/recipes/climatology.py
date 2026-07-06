@@ -194,15 +194,17 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         return unit["output_collection"]
 
     def _published_collection(self, unit, catalog):
-        """The normals collection. Marked INTERNAL: it is a derivation
-        intermediate (the anomaly's baseline input), read by the engine but not
-        served — only the raw and anomaly collections are public."""
+        """The normals collection. Its internal visibility is now owned by the
+        product declaration (OutputRef visibility="internal"), which materialises
+        this collection at enable-time; this get_or_create is an inert fallback
+        that finds the pre-materialised row (or creates a bare one if a run
+        somehow precedes materialisation)."""
         from georiva.core.models import Collection
 
         slug = self._collection_slug(unit)
         collection, _ = Collection.objects.get_or_create(
             catalog=catalog, slug=slug,
-            defaults={"name": slug, "visibility": Collection.Visibility.INTERNAL},
+            defaults={"name": slug},
         )
         return collection
 

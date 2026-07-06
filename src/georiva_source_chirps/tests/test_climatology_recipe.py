@@ -13,7 +13,7 @@ import pandas as pd
 import xarray as xr
 from django.test import TestCase as DjangoTestCase
 
-from georiva.core.models import Catalog, Item, Unit, Variable
+from georiva.core.models import Catalog, Collection, Item, Unit, Variable
 from georiva.processing.engine import run_unit
 from georiva.staging.models import (
     DerivationLink,
@@ -108,8 +108,6 @@ class _ClimoFixture(DjangoTestCase):
         # The source Variable lives on the raw *published* collection (same slug
         # as the staging collection) — what promotion serves — not on the
         # staging asset, which carries no Variable in production.
-        from georiva.core.models import Collection
-
         self.src_col = Collection.objects.create(
             catalog=self.catalog, slug=self.SOURCE, name=self.SOURCE
         )
@@ -188,6 +186,15 @@ class RunUnitTests(_ClimoFixture):
         utc = timezone.utc
         a = self._stage(datetime(2011, 6, 15, tzinfo=utc))
         b = self._stage(datetime(2012, 6, 10, tzinfo=utc))
+        # The normals collection's internal visibility is now owned by the
+        # product declaration and materialised when the product is enabled — the
+        # recipe's own get_or_create is an inert fallback. Simulate that
+        # materialisation, then assert the run reads it and leaves it internal.
+        Collection.objects.create(
+            catalog=self.catalog, slug="chirps-monthly-climatology",
+            name="CHIRPS monthly climatology",
+            visibility=Collection.Visibility.INTERNAL,
+        )
         # Two June slices carrying 10 and 20 -> climatological mean 15.
         result = self._run(self._unit(min_count=2), _cube([10.0, 20.0]))
 
