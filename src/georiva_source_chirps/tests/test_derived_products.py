@@ -6,7 +6,7 @@ covers the promotion product that publishes the raw rainfall.
 """
 from django.test import TestCase
 
-from georiva.core.derived_products import InputRef, OutputRef
+from georiva.core.derived_products import InputRef
 from georiva.core.models import Catalog, Collection
 from georiva.sources.derivation_invocation import collection_routes_to_staging
 from georiva.sources.models import DerivedProduct
@@ -61,10 +61,11 @@ class PromotionProductTests(TestCase):
             product.inputs,
             (InputRef(role="source", collection="chirps-monthly", tier="staging"),),
         )
-        self.assertEqual(
-            product.outputs,
-            (OutputRef(role="served", collection="chirps-monthly"),),
-        )
+        out = product.outputs[0]
+        self.assertEqual((out.role, out.collection), ("served", "chirps-monthly"))
+        self.assertEqual(out.title, "CHIRPS monthly rainfall")
+        self.assertTrue(out.description)
+        self.assertEqual(out.visibility, "public")
 
     def test_one_product_per_resolution_across_multiple_selections(self):
         feed = _transient_feed("chirps-monthly", "chirps-dekadal")
@@ -118,11 +119,16 @@ class ClimatologyProductTests(TestCase):
             (InputRef(role="value", collection="chirps-monthly", tier="staging"),),
         )
         # Output slug drops the baseline years: one climatology collection per
-        # resolution (ADR-0008).
+        # resolution (ADR-0008). It is declared internal — a derivation
+        # intermediate (the anomaly's baseline), never served.
+        out = product.outputs[0]
         self.assertEqual(
-            product.outputs,
-            (OutputRef(role="climatology", collection="chirps-monthly-climatology"),),
+            (out.role, out.collection),
+            ("climatology", "chirps-monthly-climatology"),
         )
+        self.assertEqual(out.title, "CHIRPS monthly climatology")
+        self.assertTrue(out.description)
+        self.assertEqual(out.visibility, "internal")
 
     def test_config_schema_exposes_baseline_and_min_count_with_defaults(self):
         from georiva_source_chirps.constants import CHIRPS_BASELINE
@@ -174,14 +180,21 @@ class AnomalyProductTests(TestCase):
     def test_emits_absolute_and_relative_anomaly_collections_without_baseline_years(self):
         product = self._anomaly(_transient_feed("chirps-monthly"))
 
+        anomaly, relative = product.outputs
         self.assertEqual(
-            product.outputs,
-            (
-                OutputRef(role="anomaly", collection="chirps-monthly-anomaly"),
-                OutputRef(role="relative-anomaly",
-                          collection="chirps-monthly-relative-anomaly"),
-            ),
+            (anomaly.role, anomaly.collection),
+            ("anomaly", "chirps-monthly-anomaly"),
         )
+        self.assertEqual(anomaly.title, "CHIRPS monthly anomaly")
+        self.assertEqual(anomaly.visibility, "public")
+        self.assertEqual(
+            (relative.role, relative.collection),
+            ("relative-anomaly", "chirps-monthly-relative-anomaly"),
+        )
+        self.assertEqual(relative.title, "CHIRPS monthly relative anomaly")
+        # Both anomaly outputs carry human descriptions for the catalog.
+        self.assertTrue(anomaly.description)
+        self.assertTrue(relative.description)
 
 
 class RawRoutesToStagingTests(TestCase):

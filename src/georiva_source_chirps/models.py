@@ -171,7 +171,14 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
                 ),
                 config_schema=(),
                 inputs=(InputRef(role="source", collection=raw, tier="staging"),),
-                outputs=(OutputRef(role="served", collection=raw),),
+                outputs=(OutputRef(
+                    role="served", collection=raw,
+                    title=f"CHIRPS {resolution} rainfall",
+                    description=(
+                        f"Raw {resolution} CHIRPS rainfall, published 1:1 from "
+                        "the staged record."
+                    ),
+                ),),
                 trigger_mode="event",
             ))
             products.append(DerivedProductDefinition(
@@ -192,8 +199,17 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
                                 default=DEFAULT_MIN_COUNT),
                 ),
                 inputs=(InputRef(role="value", collection=raw, tier="staging"),),
-                outputs=(OutputRef(role="climatology",
-                                   collection=climatology_slug(resolution)),),
+                outputs=(OutputRef(
+                    role="climatology",
+                    collection=climatology_slug(resolution),
+                    title=f"CHIRPS {resolution} climatology",
+                    description=(
+                        f"Per-calendar-slot {resolution} rainfall normal over the "
+                        "baseline window — the anomaly's reference. Internal: read "
+                        "by the engine, not served."
+                    ),
+                    visibility="internal",
+                ),),
                 trigger_mode="manual",
             ))
             products.append(DerivedProductDefinition(
@@ -213,9 +229,23 @@ class CHIRPSDataFeed(DataFeed, TimeStampedModel):
                              tier="published"),
                 ),
                 outputs=(
-                    OutputRef(role="anomaly", collection=anomaly_slug(resolution)),
-                    OutputRef(role="relative-anomaly",
-                              collection=relative_anomaly_slug(resolution)),
+                    OutputRef(
+                        role="anomaly", collection=anomaly_slug(resolution),
+                        title=f"CHIRPS {resolution} anomaly",
+                        description=(
+                            f"Absolute {resolution} rainfall departure from the "
+                            "climatology normal for the calendar slot."
+                        ),
+                    ),
+                    OutputRef(
+                        role="relative-anomaly",
+                        collection=relative_anomaly_slug(resolution),
+                        title=f"CHIRPS {resolution} relative anomaly",
+                        description=(
+                            f"{resolution.title()} rainfall anomaly as a percentage "
+                            "of the climatology normal."
+                        ),
+                    ),
                 ),
                 trigger_mode="event",
             ))
