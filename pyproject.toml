@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "georiva-source-chirps"
+version = "0.0.1"
+description = "GeoRiva source plugin for CHIRPS v2.0 rainfall (monthly/dekadal/pentadal GeoTIFFs)."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "WMO RAF" }]
+classifiers = []
+# NOTE: `georiva` (the core) is intentionally NOT listed here — it is provided by
+# the runtime environment (the GeoRiva Docker image, or the uv workspace where
+# core is a sibling member in the same virtualenv). This plugin's only runtime
+# deps (rasterio, requests) are also provided by core, so it declares none.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/wmo-raf/georiva-source-chirps"
+
+[dependency-groups]
+dev = ["flake8==7.0.0"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+exclude = '''
+/(
+  | migrations
+  | generated
+)/
+'''
