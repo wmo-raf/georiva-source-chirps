@@ -9,7 +9,7 @@ from django.test import TestCase
 from georiva.core.derived_products import InputRef
 from georiva.core.models import Catalog, Collection
 from georiva.sources.derivation_invocation import collection_routes_to_staging
-from georiva.sources.models import DerivedProduct
+from georiva.sources.models import DerivedProduct, DerivedProductInput
 
 from georiva_source_chirps.constants import (
     anomaly_slug,
@@ -214,9 +214,14 @@ class RawRoutesToStagingTests(TestCase):
             data_feed=self.feed, collection=collection,
             definition_key="chirps-monthly", period="monthly",
         )
-        DerivedProduct.objects.create(
+        product = DerivedProduct.objects.create(
             data_feed=self.feed, definition_key="chirps-monthly-promotion",
             recipe_type="promotion", config={}, is_enabled=True,
+        )
+        # Routing is driven by the pinned staging-input binding (ADR-0010 §4).
+        DerivedProductInput.objects.create(
+            product=product, role="source", tier="staging",
+            source_key="chirps-monthly", collection=collection,
         )
 
     def test_raw_collection_routes_to_staging_when_promotion_is_enabled(self):
@@ -224,3 +229,71 @@ class RawRoutesToStagingTests(TestCase):
 
     def test_a_collection_no_product_consumes_does_not_route_to_staging(self):
         self.assertFalse(collection_routes_to_staging(self.feed, "chirps-dekadal"))
+
+
+class WizardPathRoutingRegressionTests(TestCase):
+    """End-to-end guard for the failure this ADR-0010 slice fixes: a CHIRPS feed
+    provisioned through the *real* setup service (not hand-created collections)
+    must route its raw collection to staging and dispatch an arriving staged
+    input to the promotion. Before the unified slug scheme the service produced a
+    catalog-prefixed slug ('chirps-chirps-monthly') that never matched the
+    declaration key ('chirps-monthly'), so the whole product chain sat inert —
+    invisible to every test that hand-created the collection with the right slug.
+    """
+
+    def _monthly_definition(self):
+        return next(
+            d for d in CHIRPSDataFeed.get_collection_definitions()
+            if d.key == "chirps-monthly"
+        )
+
+    def _provision(self):
+        from georiva.sources.setup_service import SourceSetupService
+
+        catalog = Catalog.objects.create(
+            name="CHIRPS", slug="chirps", file_format="geotiff"
+        )
+        service = SourceSetupService()
+        feed, collections = service.provision(
+            CHIRPSDataFeed,
+            catalog=catalog,
+            feed_name="CHIRPS Africa",
+            selected_definitions=[(self._monthly_definition(), {})],
+        )
+        promotion = next(
+            p for p in feed.get_derived_products()
+            if p.key == "chirps-monthly-promotion"
+        )
+        service.provision_derived_products(feed, [(promotion, {}, True)])
+        return feed, collections[0]
+
+    def test_provisioned_raw_collection_uses_the_declaration_key_as_its_slug(self):
+        _feed, collection = self._provision()
+        # The service-derived slug — not a hand-written literal — is the key the
+        # promotion's InputRef/OutputRef reference.
+        self.assertEqual(collection.slug, "chirps-monthly")
+
+    def test_provisioned_feed_routes_its_raw_collection_to_staging(self):
+        feed, collection = self._provision()
+        self.assertTrue(collection_routes_to_staging(feed, collection.slug))
+
+    def test_arriving_staged_input_dispatches_to_the_promotion(self):
+        from unittest.mock import patch
+
+        from georiva.sources.derivation_invocation import dispatch_for_input
+
+        feed, collection = self._provision()
+        # An arriving StagingItem in the raw collection. The trigger carries the
+        # collection_id (ADR-0010 §3/§4) that dispatch matches binding rows on.
+        # Patch the engine so we assert the routing decision, not a full run.
+        trigger = {
+            "staging_item_id": 4242,
+            "collection_id": collection.pk,
+            "collection_slug": collection.slug,
+        }
+        with patch("georiva.processing.engine.run", return_value=[]) as run:
+            dispatch_for_input(trigger)
+
+        self.assertTrue(run.called, "no product matched the arriving staged input")
+        matched_recipe = run.call_args.args[0]
+        self.assertEqual(matched_recipe.type, "promotion")

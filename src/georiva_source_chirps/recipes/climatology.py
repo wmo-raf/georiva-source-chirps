@@ -25,7 +25,7 @@ from georiva.processing.recipe import (
 )
 from georiva.processing.registry import RecipeRegistry
 
-from georiva_source_chirps.constants import DEFAULT_MIN_COUNT, resolution_from_slug
+from georiva_source_chirps.constants import DEFAULT_MIN_COUNT, resolution_of
 from georiva_source_chirps.periods import slot_count, slot_index, slot_start
 from georiva_source_chirps.recipes.stats import array_stats
 
@@ -55,6 +55,8 @@ def _output_collection(selector: dict) -> str:
     return outputs[0]["collection"]
 
 
+
+
 @RecipeRegistry.register
 class ChirpsClimatologyRecipe(BaseRecipe):
     type = "chirps-climatology"
@@ -71,16 +73,25 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         return self.enumerate_units(trigger)
 
     def enumerate_units(self, selector) -> Iterable[ProductionUnit]:
+        from georiva.processing.recipe import (
+            binding_input_collection_id,
+            binding_output_collection_id,
+        )
+
         selector = selector or {}
         source = _source_collection(selector)
         output = _output_collection(selector)
-        resolution = resolution_from_slug(source)
+        source_id = binding_input_collection_id(selector, "staging")
+        output_id = binding_output_collection_id(selector, "climatology")
+        resolution = resolution_of(source_id, source)
         baseline = [selector["baseline_start"], selector["baseline_end"]]
         min_count = selector.get("min_count", DEFAULT_MIN_COUNT)
         for slot in range(1, slot_count(resolution) + 1):
             yield {
                 "source_collection": source,
+                "source_collection_id": source_id,
                 "output_collection": output,
+                "output_collection_id": output_id,
                 "resolution": resolution,
                 "baseline": baseline,
                 "min_count": min_count,
@@ -114,12 +125,16 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         start, end = unit["baseline"]
         resolution = unit["resolution"]
         slot = unit["slot"]
+        # Prefer the pinned collection FK (catalog-scoped, rename-safe); a legacy
+        # selector with no id falls back to the declared slug.
+        source_id = unit.get("source_collection_id")
+        if source_id is not None:
+            qs = StagingItem.objects.filter(collection__collection_id=source_id)
+        else:
+            qs = StagingItem.objects.filter(collection__slug=unit["source_collection"])
         items = []
         for si in (
-            StagingItem.objects
-            .filter(collection__slug=unit["source_collection"])
-            .select_related("collection__catalog")
-            .prefetch_related("assets")
+            qs.select_related("collection__catalog").prefetch_related("assets")
         ):
             dt = si.datetime
             if dt is None:
@@ -194,13 +209,18 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         return unit["output_collection"]
 
     def _published_collection(self, unit, catalog):
-        """The normals collection. Its internal visibility is now owned by the
-        product declaration (OutputRef visibility="internal"), which materialises
-        this collection at enable-time; this get_or_create is an inert fallback
-        that finds the pre-materialised row (or creates a bare one if a run
-        somehow precedes materialisation)."""
+        """The normals collection. Owned by the product declaration
+        (OutputRef visibility="internal"), materialised at enable-time; this is an
+        inert fallback that finds the pre-materialised row. Resolved by the pinned
+        ``output_collection_id`` (ADR-0010 §5) when present — rename-safe — else by
+        catalog+slug get_or_create for a legacy selector."""
         from georiva.core.models import Collection
 
+        output_id = unit.get("output_collection_id")
+        if output_id is not None:
+            existing = Collection.objects.filter(id=output_id).first()
+            if existing is not None:
+                return existing
         slug = self._collection_slug(unit)
         collection, _ = Collection.objects.get_or_create(
             catalog=catalog, slug=slug,
@@ -220,10 +240,14 @@ class ChirpsClimatologyRecipe(BaseRecipe):
 
         si = resolved["value"].items[0]
         catalog = si.collection.catalog
-        src = Variable.objects.filter(
-            collection__catalog=catalog,
-            collection__slug=unit["source_collection"],
-        ).first()
+        source_id = unit.get("source_collection_id")
+        if source_id is not None:
+            src = Variable.objects.filter(collection_id=source_id).first()
+        else:
+            src = Variable.objects.filter(
+                collection__catalog=catalog,
+                collection__slug=unit["source_collection"],
+            ).first()
         if src is None:
             raise ValueError(
                 "ChirpsClimatologyRecipe: no source Variable in raw collection "

@@ -192,6 +192,28 @@ class ResolveInputsTests(_AnomalyFixture):
         )
 
 
+class IdBasedResolutionTests(_AnomalyFixture):
+    """The published baseline (climatology normal) is joined by the pinned
+    collection identity, not the declared slug (ADR-0010 §5), so an operator
+    rename of the climatology collection's slug can't break the anomaly."""
+
+    def test_baseline_join_resolves_by_id_after_a_climo_slug_rename(self):
+        si = self._stage(datetime(2024, 6, 15, tzinfo=UTC))
+        normal = self._publish_normal(datetime(1991, 6, 1, tzinfo=UTC))
+        climo_col = normal.collection
+
+        # Operator renames the climatology collection AFTER enablement.
+        climo_col.slug = "climo-renamed-by-operator"
+        climo_col.save(update_fields=["slug"])
+
+        # The pinned baseline_collection_id survives the rename; the slug in the
+        # unit is now stale, so a slug join would miss the normal.
+        unit = {**self._unit(si), "baseline_collection_id": climo_col.pk}
+        resolved = ChirpsAnomalyRecipe().resolve_inputs(unit)
+
+        self.assertEqual([i.pk for i in resolved["baseline"].items], [normal.pk])
+
+
 class RunUnitTests(_AnomalyFixture):
     def _run(self, unit, value_arr, normal_arr):
         recipe = ChirpsAnomalyRecipe()
