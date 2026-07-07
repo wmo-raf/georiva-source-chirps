@@ -141,6 +141,50 @@ class _ClimoFixture(DjangoTestCase):
         return unit
 
 
+class IdBasedResolutionTests(_ClimoFixture):
+    """The recipe resolves by the pinned collection identity, not the declared
+    slug (ADR-0010 §5): resolution comes from the source Collection's
+    time_resolution, and slice/output resolution survives a slug rename."""
+
+    def _linked_selector(self, out_col):
+        # Link the staging collection to its core Collection and give the core
+        # collection a time_resolution — the identity the recipe reads.
+        self.scol.collection = self.src_col
+        self.scol.save(update_fields=["collection"])
+        self.src_col.time_resolution = "monthly"
+        self.src_col.save(update_fields=["time_resolution"])
+        return {
+            "inputs": [{"role": "value", "collection": self.SOURCE,
+                        "tier": "staging", "collection_id": self.src_col.pk}],
+            "outputs": [{"role": "climatology", "collection": out_col.slug,
+                         "collection_id": out_col.pk}],
+            "baseline_start": 1991, "baseline_end": 2020, "min_count": 2,
+        }
+
+    def test_resolution_and_slice_resolution_survive_a_source_slug_rename(self):
+        out_col = Collection.objects.create(
+            catalog=self.catalog, slug="chirps-monthly-climatology", name="Normals"
+        )
+        selector = self._linked_selector(out_col)
+
+        # Operator renames the raw collection's slug AFTER enablement. A slug
+        # parser would now fail ('renamed' is not a resolution); identity resolves.
+        self.src_col.slug = "renamed-by-operator"
+        self.src_col.save(update_fields=["slug"])
+
+        unit = next(iter(ChirpsClimatologyRecipe().enumerate_units(selector)))
+        self.assertEqual(unit["resolution"], "monthly")
+        self.assertEqual(unit["source_collection_id"], self.src_col.pk)
+
+        # A June slice resolves through the staging->core link by id.
+        june = self._stage(datetime(2011, 6, 15, tzinfo=timezone.utc))
+        self._stage(datetime(2012, 6, 10, tzinfo=timezone.utc))
+        resolved = ChirpsClimatologyRecipe().resolve_inputs(
+            {**unit, "slot": 6}
+        )
+        self.assertIn(june.pk, {si.pk for si in resolved["value"].items})
+
+
 class ResolveInputsTests(_ClimoFixture):
     def test_value_resolves_only_the_slots_slices_within_the_baseline(self):
         utc = timezone.utc

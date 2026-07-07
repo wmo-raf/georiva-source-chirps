@@ -30,6 +30,25 @@ def resolution_from_slug(slug: str) -> str:
     return res
 
 
+def resolution_of(source_collection_id, source_slug: str) -> str:
+    """The CHIRPS resolution for the raw collection, by *identity* (ADR-0010 §5):
+    read from the pinned source Collection's ``time_resolution`` when a
+    ``collection_id`` is available — no slug-parsing — falling back to parsing the
+    declared slug for a legacy/CLI selector that carries no id."""
+    if source_collection_id is not None:
+        from georiva.core.models import Collection
+
+        resolution = (
+            Collection.objects
+            .filter(id=source_collection_id)
+            .values_list("time_resolution", flat=True)
+            .first()
+        )
+        if resolution:
+            return resolution
+    return resolution_from_slug(source_slug)
+
+
 # ---------------------------------------------------------------------------
 # Collection-slug scheme — the single source of truth for every CHIRPS slug.
 #

@@ -23,7 +23,7 @@ from georiva.processing.recipe import (
 )
 from georiva.processing.registry import RecipeRegistry
 
-from georiva_source_chirps.constants import resolution_from_slug
+from georiva_source_chirps.constants import resolution_of
 from georiva_source_chirps.periods import slot_time
 from georiva_source_chirps.recipes.stats import array_stats
 
@@ -105,15 +105,26 @@ class ChirpsAnomalyRecipe(BaseRecipe):
             yield unit
 
     def _units_for_slice(self, selector, si) -> Iterable[ProductionUnit]:
+        from georiva.processing.recipe import (
+            binding_input_collection_id,
+            binding_output_collection_id,
+        )
+
         source = _value_collection(selector)
         baseline_collection = _baseline_collection(selector)
-        resolution = resolution_from_slug(source)
+        source_id = binding_input_collection_id(selector, "staging")
+        baseline_id = binding_input_collection_id(selector, "published")
+        resolution = resolution_of(source_id, source)
         for quantity in QUANTITIES:
+            role = QUANTITY_OUTPUT_ROLE[quantity]
             yield {
                 "staging_item_id": si.pk,
                 "source_collection": source,
+                "source_collection_id": source_id,
                 "baseline_collection": baseline_collection,
+                "baseline_collection_id": baseline_id,
                 "output_collection": _output_for_quantity(selector, quantity),
+                "output_collection_id": binding_output_collection_id(selector, role),
                 "resolution": resolution,
                 "valid_time": si.datetime.isoformat(),
                 "quantity": quantity,
@@ -130,15 +141,19 @@ class ChirpsAnomalyRecipe(BaseRecipe):
         """
         from georiva.staging.models import StagingItem
 
+        from georiva.processing.recipe import binding_input_collection_id
+
         selector = selector or {}
         source = _value_collection(selector)
+        source_id = binding_input_collection_id(selector, "staging")
         year_range = selector.get("year_range")
 
-        for si in (
-                StagingItem.objects
-                        .select_related("collection")
-                        .filter(collection__slug=source)
-        ):
+        base_qs = StagingItem.objects.select_related("collection")
+        if source_id is not None:
+            base_qs = base_qs.filter(collection__collection_id=source_id)
+        else:
+            base_qs = base_qs.filter(collection__slug=source)
+        for si in base_qs:
             if si.datetime is None:
                 continue
             if year_range and not (year_range[0] <= si.datetime.year <= year_range[1]):
@@ -183,12 +198,13 @@ class ChirpsAnomalyRecipe(BaseRecipe):
 
         dt = datetime.fromisoformat(unit["valid_time"])
         join_time = slot_time(dt, unit["resolution"]).replace(tzinfo=timezone.utc)
-        item = (
-            Item.objects
-            .prefetch_related("assets")
-            .filter(collection__slug=unit["baseline_collection"], time=join_time)
-            .first()
-        )
+        qs = Item.objects.prefetch_related("assets")
+        baseline_id = unit.get("baseline_collection_id")
+        if baseline_id is not None:
+            qs = qs.filter(collection_id=baseline_id, time=join_time)
+        else:
+            qs = qs.filter(collection__slug=unit["baseline_collection"], time=join_time)
+        item = qs.first()
         if item is None:
             return [], []
         return [item], list(item.assets.all())
@@ -255,6 +271,11 @@ class ChirpsAnomalyRecipe(BaseRecipe):
         # of its own (ADR-0008).
         from georiva.core.models import Collection
 
+        output_id = unit.get("output_collection_id")
+        if output_id is not None:
+            existing = Collection.objects.filter(id=output_id).first()
+            if existing is not None:
+                return existing
         slug = unit["output_collection"]
         collection, _ = Collection.objects.get_or_create(
             catalog=catalog, slug=slug, defaults={"name": slug},
@@ -268,10 +289,14 @@ class ChirpsAnomalyRecipe(BaseRecipe):
         
         si = resolved["value"].items[0]
         catalog = si.collection.catalog
-        src = Variable.objects.filter(
-            collection__catalog=catalog,
-            collection__slug=unit["source_collection"],
-        ).first()
+        source_id = unit.get("source_collection_id")
+        if source_id is not None:
+            src = Variable.objects.filter(collection_id=source_id).first()
+        else:
+            src = Variable.objects.filter(
+                collection__catalog=catalog,
+                collection__slug=unit["source_collection"],
+            ).first()
         if src is None:
             raise ValueError(
                 "ChirpsAnomalyRecipe: no source Variable in raw collection "
