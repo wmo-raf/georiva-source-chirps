@@ -12,6 +12,7 @@ See docs/adr/0007-chirps-rolling-anomaly-product-structure.md and issue #2.
 """
 from __future__ import annotations
 
+import logging
 from typing import Iterable
 
 import numpy as np
@@ -28,6 +29,8 @@ from georiva.processing.registry import RecipeRegistry
 from georiva_source_chirps.constants import DEFAULT_MIN_COUNT, resolution_of
 from georiva_source_chirps.periods import slot_count, slot_index, slot_start
 from georiva_source_chirps.recipes.stats import array_stats
+
+logger = logging.getLogger(__name__)
 
 # The sentinel year a calendar slot is encoded into on the normal's Item.time.
 SENTINEL_YEAR = 1991
@@ -196,7 +199,14 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         if not assets:
             raise ValueError("ChirpsClimatologyRecipe: no source assets to read")
 
-        bands = [read_band(a, BucketType.STAGING) for a in assets]
+        n = len(assets)
+        logger.info("climatology: reading %d source GeoTIFF(s) for the slot mean…", n)
+        bands = []
+        for i, a in enumerate(assets, 1):
+            logger.info("climatology: reading source file %d/%d — %s",
+                        i, n, getattr(a, "href", "?"))
+            bands.append(read_band(a, BucketType.STAGING))
+        logger.info("climatology: read all %d source file(s); stacking + averaging", n)
         return xr.DataArray(np.stack(bands, axis=0), dims=["time", "y", "x"])
 
     # ---- helpers ------------------------------------------------------------
