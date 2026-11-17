@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from django.test import TestCase as DjangoTestCase
 
+from georiva.organisations.testing import make_organisation
 from georiva.core.models import Asset, Catalog, Collection, Item, Unit, Variable
 from georiva.processing.engine import run_unit
 from georiva.staging.models import (
@@ -56,7 +57,7 @@ class _AnomalyFixture(DjangoTestCase):
 
     def setUp(self):
         self.catalog = Catalog.objects.create(
-            name="CHIRPS", slug="chirps", file_format="geotiff"
+            organisation=make_organisation(), name="CHIRPS", slug="chirps", file_format="geotiff"
         )
         self.scol = StagingCollection.objects.create(
             catalog=self.catalog, slug=self.SOURCE, name=self.SOURCE

@@ -13,6 +13,7 @@ import pandas as pd
 import xarray as xr
 from django.test import TestCase as DjangoTestCase
 
+from georiva.organisations.testing import make_organisation
 from georiva.core.models import Catalog, Collection, Item, Unit, Variable
 from georiva.processing.engine import run_unit
 from georiva.staging.models import (
@@ -97,7 +98,7 @@ class _ClimoFixture(DjangoTestCase):
 
     def setUp(self):
         self.catalog = Catalog.objects.create(
-            name="CHIRPS", slug="chirps", file_format="geotiff"
+            organisation=make_organisation(), name="CHIRPS", slug="chirps", file_format="geotiff"
         )
         self.scol = StagingCollection.objects.create(
             catalog=self.catalog, slug=self.SOURCE, name=self.SOURCE
