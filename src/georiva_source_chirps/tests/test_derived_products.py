@@ -7,6 +7,7 @@ covers the promotion product that publishes the raw rainfall.
 from django.test import TestCase
 
 from georiva.core.derived_products import InputRef
+from georiva.organisations.testing import make_organisation
 from georiva.core.models import Catalog, Collection
 from georiva.sources.derivation_invocation import collection_routes_to_staging
 from georiva.sources.models import DerivedProduct, DerivedProductInput
@@ -76,7 +77,7 @@ class PromotionProductTests(TestCase):
 
     def test_saved_feed_declares_the_same_products_as_the_transient_stash(self):
         catalog = Catalog.objects.create(
-            name="CHIRPS", slug="chirps", file_format="geotiff"
+            organisation=make_organisation(), name="CHIRPS", slug="chirps", file_format="geotiff"
         )
         feed = CHIRPSDataFeed.objects.create(name="CHIRPS", catalog=catalog)
         collection = Collection.objects.create(
@@ -204,7 +205,7 @@ class RawRoutesToStagingTests(TestCase):
 
     def setUp(self):
         self.catalog = Catalog.objects.create(
-            name="CHIRPS", slug="chirps", file_format="geotiff"
+            organisation=make_organisation(), name="CHIRPS", slug="chirps", file_format="geotiff"
         )
         self.feed = CHIRPSDataFeed.objects.create(name="CHIRPS", catalog=self.catalog)
         collection = Collection.objects.create(
@@ -251,7 +252,7 @@ class WizardPathRoutingRegressionTests(TestCase):
         from georiva.sources.setup_service import SourceSetupService
 
         catalog = Catalog.objects.create(
-            name="CHIRPS", slug="chirps", file_format="geotiff"
+            organisation=make_organisation(), name="CHIRPS", slug="chirps", file_format="geotiff"
         )
         service = SourceSetupService()
         feed, collections = service.provision(

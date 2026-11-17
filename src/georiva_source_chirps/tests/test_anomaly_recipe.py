@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from django.test import TestCase as DjangoTestCase
 
+from georiva.organisations.testing import make_organisation
 from georiva.core.models import Asset, Catalog, Collection, Item, Unit, Variable
 from georiva.processing.engine import run_unit
 from georiva.staging.models import (
@@ -56,7 +57,7 @@ class _AnomalyFixture(DjangoTestCase):
 
     def setUp(self):
         self.catalog = Catalog.objects.create(
-            name="CHIRPS", slug="chirps", file_format="geotiff"
+            organisation=make_organisation(), name="CHIRPS", slug="chirps", file_format="geotiff"
         )
         self.scol = StagingCollection.objects.create(
             catalog=self.catalog, slug=self.SOURCE, name=self.SOURCE
@@ -268,3 +269,16 @@ class RunUnitTests(_AnomalyFixture):
         # and carries no finite stats.
         asset = Item.objects.get(pk=result.item_id).assets.get()
         self.assertIsNone(asset.stats_mean)
+
+
+class DerivationProvenanceTests(_AnomalyFixture):
+    """The legacy fallback stamps the collection it creates with derivation
+    Provenance, so its sourceless Variables can be edited (georiva #711)."""
+
+    def test_the_fallback_stamps_the_collection_it_creates(self):
+        si = self._stage(datetime(2024, 6, 15, tzinfo=UTC))
+
+        collection = ChirpsAnomalyRecipe()._published_collection(self._unit(si), self.catalog)
+
+        self.assertEqual(collection.derived_by_recipe, ChirpsAnomalyRecipe.type)
+        self.assertFalse(collection.reads_variables_from_files)
