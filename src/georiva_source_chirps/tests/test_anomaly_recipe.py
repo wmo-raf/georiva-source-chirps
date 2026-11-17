@@ -269,3 +269,16 @@ class RunUnitTests(_AnomalyFixture):
         # and carries no finite stats.
         asset = Item.objects.get(pk=result.item_id).assets.get()
         self.assertIsNone(asset.stats_mean)
+
+
+class DerivationProvenanceTests(_AnomalyFixture):
+    """The legacy fallback stamps the collection it creates with derivation
+    Provenance, so its sourceless Variables can be edited (georiva #711)."""
+
+    def test_the_fallback_stamps_the_collection_it_creates(self):
+        si = self._stage(datetime(2024, 6, 15, tzinfo=UTC))
+
+        collection = ChirpsAnomalyRecipe()._published_collection(self._unit(si), self.catalog)
+
+        self.assertEqual(collection.derived_by_recipe, ChirpsAnomalyRecipe.type)
+        self.assertFalse(collection.reads_variables_from_files)

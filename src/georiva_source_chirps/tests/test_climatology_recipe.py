@@ -266,3 +266,24 @@ class RunUnitTests(_ClimoFixture):
         links = DerivationLink.objects.filter(derived_item=item)
         self.assertEqual({l.source_staging_item_id for l in links}, {a.pk, b.pk})
         self.assertEqual(links.first().recipe_id, "chirps-climatology")
+
+
+class DerivationProvenanceTests(_ClimoFixture):
+    """The legacy fallback stamps the collection it creates with derivation
+    Provenance, so its sourceless Variables can be edited (georiva #711)."""
+
+    def test_the_fallback_stamps_the_collection_it_creates(self):
+        collection = ChirpsClimatologyRecipe()._published_collection(self._unit(), self.catalog)
+
+        self.assertEqual(collection.derived_by_recipe, ChirpsClimatologyRecipe.type)
+        self.assertFalse(collection.reads_variables_from_files)
+
+    def test_a_pinned_collection_is_left_as_it_is(self):
+        pinned = Collection.objects.create(catalog=self.catalog, slug="pinned", name="Pinned")
+
+        found = ChirpsClimatologyRecipe()._published_collection(
+            self._unit(output_collection_id=pinned.pk), self.catalog
+        )
+
+        self.assertEqual(found.pk, pinned.pk)
+        self.assertEqual(found.derived_by_recipe, "")
