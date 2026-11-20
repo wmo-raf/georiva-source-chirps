@@ -14,7 +14,9 @@ from typing import Iterable
 
 import numpy as np
 
+from georiva.core.unit_utils import difference_unit
 from georiva.processing.recipe import (
+    SOURCE_UNIT,
     BaseRecipe,
     OutputAsset,
     OutputItem,
@@ -75,6 +77,10 @@ class ChirpsAnomalyRecipe(BaseRecipe):
     type = "chirps-anomaly"
     version = "1"
     
+    #: Both read as held (ADR 0046 §13): a difference and a ratio of two
+    #: rainfalls hold in any one unit, and the output is written down in it.
+    input_units = {"value": SOURCE_UNIT, "baseline": SOURCE_UNIT}
+
     def candidate_units(self, trigger) -> Iterable[ProductionUnit]:
         """Staging-value arrivals only. Published-item triggers (promotion
         outputs, climatology outputs, our own outputs) are ignored so the
@@ -232,8 +238,8 @@ class ChirpsAnomalyRecipe(BaseRecipe):
     def transform(self, unit: ProductionUnit, resolved) -> "list[OutputAsset]":
         from georiva.geoprocessing import anomaly
         
-        value = self.read_value(resolved["value"].assets[0])
-        normal = self.read_normal(resolved["baseline"].assets[0])
+        value = self.read_value(resolved["value"])
+        normal = self.read_normal(resolved["baseline"])
         relative = unit["quantity"] == "relative_anomaly"
         result = anomaly(value, normal, relative=relative)
         array = np.asarray(result, dtype="float32")
@@ -249,19 +255,21 @@ class ChirpsAnomalyRecipe(BaseRecipe):
     
     # ---- I/O seams (mocked in tests) ---------------------------------------
     
-    def read_value(self, asset):
-        """The arriving raw slice (Staging tier GeoTIFF) as a 2D array."""
-        from georiva.core.storage import BucketType
+    def read_value(self, value: ResolvedInput):
+        """The arriving raw slice (Staging tier) as a 2D array, in its declared unit."""
+        return value.field(value.assets[0]).data
 
-        from georiva_source_chirps.recipes.io import read_band
-        return read_band(asset, BucketType.STAGING)
-    
-    def read_normal(self, asset):
-        """The published normal (Published assets-tier COG) as a 2D array."""
-        from georiva.core.storage import BucketType
+    def read_normal(self, baseline: ResolvedInput):
+        """The published normal as a 2D array, in its declared unit."""
+        return baseline.field(baseline.assets[0]).data
 
-        from georiva_source_chirps.recipes.io import read_band
-        return read_band(asset, BucketType.ASSETS)
+    def output_unit(self, unit: ProductionUnit, resolved) -> str:
+        """An absolute anomaly is a difference, declared in the source's
+        difference unit (mm stays mm; ADR 0046 §7); a relative one is
+        ``dimensionless``."""
+        if unit["quantity"] == "relative_anomaly":
+            return "dimensionless"
+        return difference_unit(self._source_variable(unit, resolved).source_unit.symbol)
     
     # ---- helpers ------------------------------------------------------------
     
@@ -282,11 +290,10 @@ class ChirpsAnomalyRecipe(BaseRecipe):
         )
         return collection
     
-    def _output_variable(self, unit, resolved):
-        """Quantity-specific output Variable: absolute anomaly keeps the source
-        unit on a symmetric range; relative anomaly is dimensionless on [-1, 1]."""
+    def _source_variable(self, unit, resolved):
+        """The raw collection's Variable — staging assets carry none."""
         from georiva.core.models import Variable
-        
+
         si = resolved["value"].items[0]
         catalog = si.collection.catalog
         source_id = unit.get("source_collection_id")
@@ -302,27 +309,29 @@ class ChirpsAnomalyRecipe(BaseRecipe):
                 "ChirpsAnomalyRecipe: no source Variable in raw collection "
                 f"'{unit['source_collection']}'"
             )
-        collection = self._published_collection(unit, catalog)
+        return src
+
+    def _output_variable(self, unit, resolved):
+        """Quantity-specific output Variable: absolute anomaly in the source's
+        difference unit on a symmetric range; relative anomaly dimensionless on
+        [-1, 1]. Its source unit — and initial served unit — is the recipe's
+        declared output unit (ADR 0046 §13)."""
+        from georiva.core.models import Variable
+
+        src = self._source_variable(unit, resolved)
+        collection = self._published_collection(unit, resolved["value"].items[0].collection.catalog)
         spec = self._variable_spec(src, unit["quantity"])
+        spec["source_unit"] = spec["unit"] = self.output_source_unit(unit, resolved)
         out_var, _ = Variable.objects.get_or_create(
             collection=collection, slug=src.slug, defaults=spec,
         )
         return out_var
     
-    def _variable_spec(self, src, quantity: str) -> dict:
+    @staticmethod
+    def _variable_spec(src, quantity: str) -> dict:
+        # The range is held in the source unit; a span of source-unit numbers
+        # is a difference in that unit, as the anomaly is.
         span = (src.value_max - src.value_min) / 2.0
         if quantity == "relative_anomaly":
-            return {"name": f"{src.name} relative anomaly",
-                    "unit": self._dimensionless_unit(),
-                    "value_min": -1.0, "value_max": 1.0}
-        return {"name": f"{src.name} anomaly", "unit": src.unit,
-                "value_min": -span, "value_max": span}
-    
-    @staticmethod
-    def _dimensionless_unit():
-        from georiva.core.models import Unit
-        
-        unit, _ = Unit.objects.get_or_create(
-            symbol="dimensionless", defaults={"name": "Dimensionless"},
-        )
-        return unit
+            return {"name": f"{src.name} relative anomaly", "value_min": -1.0, "value_max": 1.0}
+        return {"name": f"{src.name} anomaly", "value_min": -span, "value_max": span}

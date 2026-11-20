@@ -114,7 +114,7 @@ class _ClimoFixture(DjangoTestCase):
         )
         self.src_var = Variable.objects.create(
             collection=self.src_col, slug="precip", name="Precipitation",
-            unit=self.unit_mm, value_min=0, value_max=1000,
+            source_unit=self.unit_mm, unit=self.unit_mm, value_min=0, value_max=1000,
         )
 
     def _stage(self, dt):
@@ -266,6 +266,10 @@ class RunUnitTests(_ClimoFixture):
         links = DerivationLink.objects.filter(derived_item=item)
         self.assertEqual({l.source_staging_item_id for l in links}, {a.pk, b.pk})
         self.assertEqual(links.first().recipe_id, "chirps-climatology")
+
+        # ADR 0046 §13: the normal is held in the rainfall's source unit.
+        variable = asset.variable
+        self.assertEqual((variable.source_unit.symbol, variable.unit.symbol), ("mm", "mm"))
 
 
 class DerivationProvenanceTests(_ClimoFixture):

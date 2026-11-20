@@ -1,0 +1,29 @@
+# Run with `uvx ruff@0.15.20 check .` (the version GeoRiva core pins).
+line-length = 120
+target-version = "py312"
+extend-exclude = ["**/migrations/**"]
+
+[lint]
+# Only the read-values ban for now; the plugin adopts the boilerplate's wider
+# rule set separately.
+select = ["TID251"]
+
+# Values are read through GeoRiva core's read module, never by opening raster
+# bytes here (ADR 0046 §19-20): a recipe reads its inputs with
+# `resolved[role].field(asset)` in the unit it declares in `input_units`.
+# Ruff cannot see a call on an object, so reading a GeoRiva bucket's
+# `read_bytes(key)` is banned by review rather than by this rule.
+[lint.flake8-tidy-imports.banned-api]
+"rasterio.open".msg = "Read values through georiva.core.values (ADR 0046), not rasterio.open."
+"rasterio.MemoryFile".msg = "Read values through georiva.core.values (ADR 0046), not rasterio.MemoryFile."
+"xarray.open_dataset".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_dataset."
+"xarray.open_dataarray".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_dataarray."
+"xarray.open_mfdataset".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_mfdataset."
+"xarray.open_zarr".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_zarr."
+"xarray.open_datatree".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_datatree."
+"rioxarray.open_rasterio".msg = "Read values through georiva.core.values (ADR 0046), not rioxarray.open_rasterio."
+
+[lint.per-file-ignores]
+# The fetcher handles bytes, not values: it opens the GeoTIFF it just
+# decompressed to check it and stamp CHIRPS' nodata before staging it.
+"src/georiva_source_chirps/source.py" = ["TID251"]
