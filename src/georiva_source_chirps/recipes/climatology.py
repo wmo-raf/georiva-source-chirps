@@ -18,6 +18,7 @@ from typing import Iterable
 import numpy as np
 
 from georiva.processing.recipe import (
+    SOURCE_UNIT,
     BaseRecipe,
     OutputAsset,
     OutputItem,
@@ -64,6 +65,9 @@ def _output_collection(selector: dict) -> str:
 class ChirpsClimatologyRecipe(BaseRecipe):
     type = "chirps-climatology"
     version = "1"
+    #: Read as held (ADR 0046 §13): a mean holds in any one unit, and the normal
+    #: is written down in the unit it read in.
+    input_units = {"value": SOURCE_UNIT}
 
     def candidate_units(self, trigger) -> Iterable[ProductionUnit]:
         """Manual only. ``dispatch_for_input`` still fans this product out on a
@@ -166,7 +170,7 @@ class ChirpsClimatologyRecipe(BaseRecipe):
     def transform(self, unit: ProductionUnit, resolved) -> "list[OutputAsset]":
         from georiva.geoprocessing import temporal_aggregate
 
-        series = self.read_series(resolved["value"].assets)
+        series = self.read_series(resolved["value"])
         mean = temporal_aggregate(series, freq=None)
         array = np.asarray(mean, dtype="float32")
 
@@ -181,33 +185,35 @@ class ChirpsClimatologyRecipe(BaseRecipe):
 
     # ---- I/O seam (mocked in tests) ----------------------------------------
 
-    def read_series(self, assets):
-        """Stack the slot's single-band CHIRPS GeoTIFFs into a (time, y, x) array.
+    def read_series(self, value: ResolvedInput):
+        """Stack the slot's single-band CHIRPS slices into a (time, y, x) array,
+        each read in the input's declared unit through core's read module.
 
         The only real I/O in the recipe and its single test seam: unit tests
         patch this to return an in-memory cube. Exact time coordinates are
         irrelevant here — the transform means the whole stack — so slices are
-        stacked along a synthetic time index. Nodata is mapped to NaN so the
-        mean skips it.
+        stacked along a synthetic time index. Nodata arrives as NaN, so the mean
+        skips it.
         """
         import xarray as xr
 
-        from georiva_source_chirps.recipes.io import read_band
-
-        from georiva.core.storage import BucketType
-
+        assets = value.assets
         if not assets:
             raise ValueError("ChirpsClimatologyRecipe: no source assets to read")
 
         n = len(assets)
-        logger.info("climatology: reading %d source GeoTIFF(s) for the slot mean…", n)
+        logger.info("climatology: reading %d source slice(s) for the slot mean…", n)
         bands = []
         for i, a in enumerate(assets, 1):
             logger.info("climatology: reading source file %d/%d — %s",
                         i, n, getattr(a, "href", "?"))
-            bands.append(read_band(a, BucketType.STAGING))
+            bands.append(value.field(a).data)
         logger.info("climatology: read all %d source file(s); stacking + averaging", n)
         return xr.DataArray(np.stack(bands, axis=0), dims=["time", "y", "x"])
+
+    def output_unit(self, unit: ProductionUnit, resolved) -> str:
+        """The normal is a mean of the rainfall, in the rainfall's source unit."""
+        return self._source_variable(unit, resolved).source_unit.symbol
 
     # ---- helpers ------------------------------------------------------------
 
@@ -238,14 +244,10 @@ class ChirpsClimatologyRecipe(BaseRecipe):
         )
         return collection
 
-    def _output_variable(self, unit, resolved):
-        """The output ``precip`` Variable, mirroring the source (the normal is in
-        the same unit and range as the input rainfall).
-
-        Staging assets carry no Variable, so the source is taken from the raw
-        *published* collection (same slug as the staging collection) — the one
-        promotion serves and provisioning gave the precip Variable.
-        """
+    def _source_variable(self, unit, resolved):
+        """The raw *published* collection's Variable (same slug as the staging
+        collection) — the one promotion serves and provisioning gave the precip
+        Variable. Staging assets carry no Variable."""
         from georiva.core.models import Variable
 
         si = resolved["value"].items[0]
@@ -263,10 +265,20 @@ class ChirpsClimatologyRecipe(BaseRecipe):
                 "ChirpsClimatologyRecipe: no source Variable in raw collection "
                 f"'{unit['source_collection']}'"
             )
-        collection = self._published_collection(unit, catalog)
+        return src
+
+    def _output_variable(self, unit, resolved):
+        """The output ``precip`` Variable, mirroring the source: the normal is in
+        the same unit and range as the input rainfall. Its source unit — and
+        initial served unit — is the recipe's declared output unit (ADR 0046 §13)."""
+        from georiva.core.models import Variable
+
+        src = self._source_variable(unit, resolved)
+        collection = self._published_collection(unit, resolved["value"].items[0].collection.catalog)
+        out_unit = self.output_source_unit(unit, resolved)
         out_var, _ = Variable.objects.get_or_create(
             collection=collection, slug=src.slug,
-            defaults={"name": src.name, "unit": src.unit,
+            defaults={"name": src.name, "source_unit": out_unit, "unit": out_unit,
                       "value_min": src.value_min, "value_max": src.value_max},
         )
         return out_var

@@ -72,7 +72,7 @@ class _AnomalyFixture(DjangoTestCase):
         )
         self.src_var = Variable.objects.create(
             collection=self.src_col, slug="precip", name="Precipitation",
-            unit=self.unit_mm, value_min=0, value_max=1000,
+            source_unit=self.unit_mm, unit=self.unit_mm, value_min=0, value_max=1000,
         )
 
     def _stage(self, dt):
@@ -93,7 +93,7 @@ class _AnomalyFixture(DjangoTestCase):
         )
         var, _ = Variable.objects.get_or_create(
             collection=col, slug="precip",
-            defaults={"name": "Precipitation", "unit": self.unit_mm,
+            defaults={"name": "Precipitation", "source_unit": self.unit_mm, "unit": self.unit_mm,
                       "value_min": 0, "value_max": 1000},
         )
         item = Item.objects.create(
@@ -256,6 +256,20 @@ class RunUnitTests(_AnomalyFixture):
         self.assertEqual(item.collection.slug, "chirps-monthly-relative-anomaly")
         asset = item.assets.get()
         self.assertAlmostEqual(asset.stats_mean, 0.5)  # (30-20)/20
+
+    def test_output_variables_hold_the_declared_output_unit(self):
+        # ADR 0046 §13: an absolute anomaly is a difference in the rainfall's
+        # (difference) unit — mm stays mm; a relative anomaly is dimensionless.
+        si = self._stage(datetime(2024, 6, 15, tzinfo=UTC))
+        self._publish_normal(datetime(1991, 6, 1, tzinfo=UTC))
+        arr = np.full((3, 2), 30.0, dtype="float32")
+
+        absolute = Item.objects.get(pk=self._run(self._unit(si, "anomaly"), arr, arr).item_id)
+        relative = Item.objects.get(pk=self._run(self._unit(si, "relative_anomaly"), arr, arr).item_id)
+
+        for item, symbol in ((absolute, "mm"), (relative, "dimensionless")):
+            variable = item.assets.get().variable
+            self.assertEqual((variable.source_unit.symbol, variable.unit.symbol), (symbol, symbol))
 
     def test_relative_anomaly_is_nodata_where_the_normal_is_zero(self):
         si = self._stage(datetime(2024, 6, 15, tzinfo=UTC))
