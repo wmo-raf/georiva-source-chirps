@@ -6,7 +6,7 @@ A [GeoRiva](https://github.com/wmo-raf/georiva) source plugin for
 It ships:
 
 - **`CHIRPSDataSource`** — generates download requests against the public CHC
-  file server (`https://data.chc.ucsb.edu/products/CHIRPS-2.0`) for the Africa
+  file server (`https://data.chc.ucsb.edu/products/CHIRPS/v2.0`) for the Africa
   domain, over plain HTTPS (`HTTPFetchStrategy`). It probes the server to find
   the latest available period and gunzips each `*.tif.gz` into a GeoTIFF in
   `post_process_fetched_file`, patching the CHIRPS `-9999` nodata value.

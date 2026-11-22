@@ -90,7 +90,7 @@ class CHIRPSDataSource(BaseDataSource):
     type = "chirps"
     label = "CHIRPS v2.0"
     
-    BASE_URL = "https://data.chc.ucsb.edu/products/CHIRPS-2.0"
+    BASE_URL = "https://data.chc.ucsb.edu/products/CHIRPS/v2.0"
     
     PERIODS: dict[str, ChirpsPeriodSpec] = {
         "monthly": ChirpsPeriodSpec(
