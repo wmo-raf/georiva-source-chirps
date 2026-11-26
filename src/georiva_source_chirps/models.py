@@ -30,6 +30,9 @@ COLLECTIONS = {
                 "name": "Precipitation",
                 "source_units": "mm",
                 "source_variable": "band_1",
+                # The rain that fell over the period each value stands for (GeoRiva ADR 0051).
+                "time_statistic": "sum",
+                "statistic_window": "preceding_interval",
                 "value_range": (0.0, 300.0),
             }
         ],
@@ -44,6 +47,9 @@ COLLECTIONS = {
                 "name": "Precipitation",
                 "source_units": "mm",
                 "source_variable": "band_1",
+                # The rain that fell over the period each value stands for (GeoRiva ADR 0051).
+                "time_statistic": "sum",
+                "statistic_window": "preceding_interval",
                 "value_range": (0.0, 100.0),
             }
         ],
@@ -58,6 +64,9 @@ COLLECTIONS = {
                 "name": "Precipitation",
                 "source_units": "mm",
                 "source_variable": "band_1",
+                # The rain that fell over the period each value stands for (GeoRiva ADR 0051).
+                "time_statistic": "sum",
+                "statistic_window": "preceding_interval",
                 "value_range": (0.0, 60.0),
             }
         ],
